@@ -19,11 +19,12 @@ torch, nn = try_import_torch()
 # our code
 from algo.constants import AGENT_LOGITS
 from algo.modules.critic.SharedCriticRLModule import SharedCriticRLModule
-
+from algo.modules.critic.SharedCriticCatalog import SharedCriticCatalog
 
 @DeveloperAPI
 class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
     def __init__(self, *args, **kwargs):
+        print("SCTRM")
         catalog_class = kwargs.pop("catalog_class", None)
         if catalog_class is None:
             catalog_class = SharedCriticCatalog
@@ -35,7 +36,7 @@ class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
         batch: typing.Dict[str, Any],
         embeddings: Optional[Any] = None,
     ) -> TensorType:
-        if (self.use_logits or self.use_actions): # Replace batch with augmented batch
+        if (self.self_aug or self.other_aug): # Replace batch with augmented batch
             batch = {Columns.OBS: torch.cat((batch[Columns.OBS], batch[AGENT_LOGITS]), dim=1)}
         if embeddings is None:
             embeddings = self.encoder(batch)[ENCODER_OUT][CRITIC]

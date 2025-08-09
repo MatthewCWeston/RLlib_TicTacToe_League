@@ -14,6 +14,16 @@ from ray.rllib.utils.annotations import OverrideToImplementCustomLogic
 
 from ray.rllib.algorithms.ppo.ppo_catalog import _check_if_diag_gaussian
 
+LOGITS = "logits"
+ACTIONS = "actions"
+LOGITS_AND_ACTIONS = "logits_and_actions"
+mult_dict = {
+    LOGITS: 1,
+    ACTIONS: 1,
+    LOGITS_AND_ACTIONS: 2,
+    None: 0
+}
+
 class SharedCriticCatalog(Catalog):
     def __init__(
         self,
@@ -34,12 +44,16 @@ class SharedCriticCatalog(Catalog):
             model_config_dict=model_config_dict,
         )
         # Are we expecting action logits?
-        self.use_logits = self._model_config_dict["use_logits"] if "use_logits" in self._model_config_dict else False
-        self.use_actions = self._model_config_dict["use_actions"] if "use_actions" in self._model_config_dict else False
-        logits_multiplier = int(self.use_logits) + int(self.use_actions)
-        if (logits_multiplier):
-            self._encoder_config.input_dims = (self._model_config_dict["logits_size"]*logits_multiplier + self._encoder_config.input_dims[0],)
-        # We only want one encoder, so don't make a separate one for an actor that doesn't exist. We should switch to a base_encoder_config at some point.
+        self.self_aug = self._model_config_dict["self_aug"] if "self_aug" in self._model_config_dict else None
+        self.other_aug = self._model_config_dict["other_aug"] if "other_aug" in self._model_config_dict else None
+        print(mult_dict)
+        print([self.self_aug, self.other_aug])
+        aug_mult = sum(mult_dict[x] for x in [self.self_aug, self.other_aug])
+        print(f"Aug multiplier: {aug_mult}")
+        self.aug_size = self._model_config_dict["logits_size"]*aug_mult
+        if (aug_mult):
+            self._encoder_config.input_dims = (self.aug_size + self._encoder_config.input_dims[0],)
+        # We only want one encoder, so don't make a separate one for an actor that doesn't exist. We should switch to base_encoder_config at some point.
         self._encoder_config.shared = True
         # Replace EncoderConfig by ActorCriticEncoderConfig
         self.encoder_config = ActorCriticEncoderConfig(

@@ -36,8 +36,8 @@ class SharedCriticRLModule(RLModule, ValueFunctionAPI, abc.ABC):
           # Build models from catalog.
           self.encoder = self.catalog.build_encoder(framework=self.framework)
           self.vf = self.catalog.build_vf_head(framework=self.framework)
-          self.use_logits = self.catalog.use_logits # propagate variable
-          self.use_actions = self.catalog.use_actions # propagate variable
+          self.self_aug, self.other_aug = self.catalog.self_aug, self.catalog.other_aug
+          self.aug_size = self.catalog.aug_size
         except Exception as e:
           print(e)
           raise e

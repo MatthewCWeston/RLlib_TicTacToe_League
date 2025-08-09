@@ -23,6 +23,11 @@ from ray.rllib.utils.typing import EpisodeType
 
 # From our code
 from algo.constants import SHARED_CRITIC_ID, AGENT_LOGITS, OBSERVATIONS
+from algo.modules.critic.SharedCriticCatalog import (
+    LOGITS,
+    ACTIONS,
+    LOGITS_AND_ACTIONS,
+)
 
 
 class CMAPPOGAEConnector(ConnectorV2):
@@ -48,16 +53,16 @@ class CMAPPOGAEConnector(ConnectorV2):
       a_dim = batch[mid][Columns.ACTION_DIST_INPUTS].shape[1]
       return torch.nn.functional.one_hot(batch[mid][Columns.ACTIONS][s:s+l].long(), a_dim)
 
-    def get_actions_and_logits(self, batch, mid, s, l):
+    def get_logits_and_actions(self, batch, mid, s, l):
       logits = self.get_logits(batch, mid, s, l)
       actions = self.get_actions(batch, mid, s, l)
       return torch.cat((actions, logits), dim=1)
 
-    def augment_critic(self, batch, meps, aug_fn):
+    def augment_critic(self, batch, meps, aug_fn_self, aug_fn_othr, aug_size):
       for aid in batch:
         # Initialize next two action logit sets
         b_lgts = batch[aid][Columns.ACTION_DIST_INPUTS]
-        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0], b_lgts.shape[1]*2*(2 if aug_fn == self.get_actions_and_logits else 1))) # Create logit predictions
+        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0], aug_size)).to(b_lgts.device) # Create logit predictions
       start_indices = defaultdict(lambda: 0) # where to start in each agent's batch, when populating next action logits for critic
       for mep in meps:
         x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
@@ -72,27 +77,25 @@ class CMAPPOGAEConnector(ConnectorV2):
         o_s = start_indices[o_mid]
         start_indices[o_mid]+=o_l
         # Grab aug vectors
-        x_aug, o_aug = aug_fn(batch, x_mid, x_s, x_l), aug_fn(batch, o_mid, o_s, o_l)
-        # Grab logits too, for an experiment
-        x_logits, o_logits = self.get_logits(batch, x_mid, x_s, x_l), self.get_logits(batch, o_mid, o_s, o_l)
+        x_aug_self, o_aug_self = aug_fn_self(batch, x_mid, x_s, x_l), aug_fn_self(batch, o_mid, o_s, o_l)
+        x_aug_othr, o_aug_othr = aug_fn_othr(batch, x_mid, x_s, x_l), aug_fn_othr(batch, o_mid, o_s, o_l)
         # Double-check that we have the right swath by comparing observations. Can comment out once we're sure.
         x_ep_obs = np.stack([o[OBSERVATIONS] for o in x_ep.observations][:x_l])
-        tmp = np.array(batch[x_mid][Columns.OBS][OBSERVATIONS][x_s:x_s+x_l])
+        tmp = np.array(batch[x_mid][Columns.OBS][OBSERVATIONS][x_s:x_s+x_l].cpu())
         assert np.abs(tmp-x_ep_obs).sum() == 0
         o_ep_obs = np.stack([o[OBSERVATIONS] for o in o_ep.observations][:o_l])
-        tmp = np.array(batch[o_mid][Columns.OBS][OBSERVATIONS][o_s:o_s+o_l])
+        tmp = np.array(batch[o_mid][Columns.OBS][OBSERVATIONS][o_s:o_s+o_l].cpu())
         assert np.abs(tmp-o_ep_obs).sum() == 0
-        # Set the logit values
-        #
-        lc = x_aug.shape[1]
-        # First half of X's logits are X's logits.
-        batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l, :lc] = x_logits
-        # Second half of X's logits are O's corresponding logits.
-        batch[x_mid][AGENT_LOGITS][x_s:x_s+o_l, lc:] = o_aug
-        # First half of O's logits are O's logits
-        batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l, :lc] = o_logits
-        # Second half of O's logits are X's logits downshifted by 1.
-        batch[o_mid][AGENT_LOGITS][o_s:o_s+(x_l-1), lc:] = x_aug[1:]
+        # Set the aug values
+        lc = x_aug_self.shape[1]
+        # First half of X's logits are X's aug.
+        batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l, :lc] = x_aug_self
+        # Second half of X's aug are O's corresponding aug.
+        batch[x_mid][AGENT_LOGITS][x_s:x_s+o_l, lc:] = o_aug_othr
+        # First half of O's aug are O's aug
+        batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l, :lc] = o_aug_self
+        # Second half of O's aug are X's aug downshifted by 1.
+        batch[o_mid][AGENT_LOGITS][o_s:o_s+(x_l-1), lc:] = x_aug_othr[1:]
 
     @override(ConnectorV2)
     def __call__(
@@ -111,15 +114,14 @@ class CMAPPOGAEConnector(ConnectorV2):
         )
         # Gather logits for next two actions, to inform critic about policies
         sc = rl_module[SHARED_CRITIC_ID]
-        ul, ua = sc.use_logits, sc.use_actions
-        if (ul or ua):
-          if (ul and ua):
-            aug_fn = self.get_actions_and_logits
-          elif (ul):
-            aug_fn = self.get_logits
-          elif (ua):
-            aug_fn = self.get_actions
-          self.augment_critic(batch, episodes, aug_fn)
+        aug_fn_dict = {
+            LOGITS: self.get_logits,
+            ACTIONS: self.get_actions,
+            LOGITS_AND_ACTIONS: self.get_logits_and_actions
+        }
+        sa, oa = aug_fn_dict[sc.self_aug], aug_fn_dict[sc.other_aug]
+        if (sa or oa):
+          self.augment_critic(batch, episodes, sa, oa, sc.aug_size)
         # Perform the value net's forward pass.
         # Our only modification to the original - we use the shared critic to compute value, rather than the individual networks
         # When we add logits, we should also add other_agent_logits to each agent's associated batch.

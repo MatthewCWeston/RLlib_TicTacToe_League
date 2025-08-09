@@ -5,15 +5,18 @@ import numpy as np
 
 from ray.rllib.callbacks.callbacks import RLlibCallback
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
+from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
 from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 
 
+
 class SelfPlayCallback(RLlibCallback):
-    def __init__(self, win_rate_threshold):
+    def __init__(self, win_rate_threshold, _lambda):
         super().__init__()
         # 0=main_v0, 1=main_v1, 2=2nd main policy snapshot, etc..
         self.current_opponent = 0
         self.win_rate_threshold = win_rate_threshold
+        self._lambda = _lambda
         # Report the matchup counters (who played against whom?).
         self._matching_stats = defaultdict(int)
         # Hacky fix for the new agent WR bug
@@ -51,13 +54,18 @@ class SelfPlayCallback(RLlibCallback):
 
     def update_atm_fn(self, algorithm, loss_rates):
         #
-        base_probs = loss_rates + .01 # add a small chance for everything
-        base_probs = base_probs / base_probs.sum()
+        base_probs = loss_rates / loss_rates.sum()
+        # Divide up 10% among the zeroes
+        z = base_probs==0
+        if (z.any()):
+            base_probs *= (1.0-self._lambda)
+            base_probs += z / z.sum() * self._lambda
+        # Reserve a one percent chance for 
         print(f"Updating ATM fn: {base_probs}")
         # Reweight and (if applicable) add to agent randomizer
         def agent_to_module_mapping_fn(agent_id, episode, **kwargs):
             opponent = "main_v{}".format(
-                np.random.choice(list(range(1, self.current_opponent + 1)),p=base_probs)
+                np.random.choice(list(range(self.current_opponent + 1)),p=base_probs)
             )
             if ((hash(episode.id_) % 2 == 0) != (agent_id=='X')):
                 self._matching_stats[("main", opponent)] += 1
@@ -83,8 +91,6 @@ class SelfPlayCallback(RLlibCallback):
         worst_ratio = 1 # worst ratio must exceed threshold
         loss_rates = np.array([result[ENV_RUNNER_RESULTS][f"loss_rate_{i}"] for i in range(self.current_opponent+1)])
         for i in range(self.current_opponent+1):
-          if (i==0 and self.current_opponent != 0):
-            continue
           win_rate = result[ENV_RUNNER_RESULTS][f"win_rate_{i}"]
           loss_rate = loss_rates[i]
           sum_rates = (win_rate + loss_rate)
@@ -123,8 +129,6 @@ class SelfPlayCallback(RLlibCallback):
                 module_id=new_module_id,
                 module_spec=RLModuleSpec.from_module(main_module), # Copy main module specs
             )
-            # TODO (sven): Maybe we should move this convenience step back into
-            #  `Algorithm.add_module()`? Would be less explicit, but also easier.
             algorithm.set_state(
                 {
                     "learner_group": {
@@ -141,8 +145,7 @@ class SelfPlayCallback(RLlibCallback):
             print("not good enough; will keep learning ...")
 
         # Update mapping function, reweighting and adding new module if needed
-        if (self.current_opponent > 0):
-          self.update_atm_fn(algorithm, loss_rates[1:])
+        self.update_atm_fn(algorithm, loss_rates)
 
         # +2 = main + random
         result["league_size"] = self.current_opponent + 2
