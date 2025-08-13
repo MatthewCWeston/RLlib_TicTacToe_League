@@ -1,4 +1,3 @@
-# @title CMAPPOGAEConnector
 from typing import Any, List, Dict
 
 import numpy as np
@@ -42,6 +41,11 @@ class CMAPPOGAEConnector(ConnectorV2):
         super().__init__(input_observation_space, input_action_space)
         self.gamma = gamma
         self.lambda_ = lambda_
+        self.aug_fn_dict = {
+            LOGITS: self.get_logits,
+            ACTIONS: self.get_actions,
+            LOGITS_AND_ACTIONS: self.get_logits_and_actions
+        }
         # Internal numpy-to-tensor connector to translate GAE results (advantages and
         # vf targets) into tensors.
         self._numpy_to_tensor_connector = None
@@ -114,12 +118,7 @@ class CMAPPOGAEConnector(ConnectorV2):
         )
         # Gather logits for next two actions, to inform critic about policies
         sc = rl_module[SHARED_CRITIC_ID]
-        aug_fn_dict = {
-            LOGITS: self.get_logits,
-            ACTIONS: self.get_actions,
-            LOGITS_AND_ACTIONS: self.get_logits_and_actions
-        }
-        sa, oa = aug_fn_dict[sc.self_aug], aug_fn_dict[sc.other_aug]
+        sa, oa = self.aug_fn_dict[sc.self_aug], self.aug_fn_dict[sc.other_aug]
         if (sa or oa):
           self.augment_critic(batch, episodes, sa, oa, sc.aug_size)
         # Perform the value net's forward pass.

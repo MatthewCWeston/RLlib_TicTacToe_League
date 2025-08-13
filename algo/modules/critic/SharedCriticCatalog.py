@@ -46,12 +46,10 @@ class SharedCriticCatalog(Catalog):
         # Are we expecting action logits?
         self.self_aug = self._model_config_dict["self_aug"] if "self_aug" in self._model_config_dict else None
         self.other_aug = self._model_config_dict["other_aug"] if "other_aug" in self._model_config_dict else None
-        print(mult_dict)
-        print([self.self_aug, self.other_aug])
-        aug_mult = sum(mult_dict[x] for x in [self.self_aug, self.other_aug])
-        print(f"Aug multiplier: {aug_mult}")
-        self.aug_size = self._model_config_dict["logits_size"]*aug_mult
-        if (aug_mult):
+        self.self_aug_size = self._model_config_dict["logits_size"]*mult_dict[self.self_aug]
+        self.aug_size = self.self_aug_size + self._model_config_dict["logits_size"]*mult_dict[self.other_aug]
+        print(f"Aug size: {self.aug_size}")
+        if (self.aug_size):
             self._encoder_config.input_dims = (self.aug_size + self._encoder_config.input_dims[0],)
         # We only want one encoder, so don't make a separate one for an actor that doesn't exist. We should switch to base_encoder_config at some point.
         self._encoder_config.shared = True

@@ -38,6 +38,7 @@ class SharedCriticRLModule(RLModule, ValueFunctionAPI, abc.ABC):
           self.vf = self.catalog.build_vf_head(framework=self.framework)
           self.self_aug, self.other_aug = self.catalog.self_aug, self.catalog.other_aug
           self.aug_size = self.catalog.aug_size
+          self.self_aug_size = self.catalog.self_aug_size
         except Exception as e:
           print(e)
           raise e

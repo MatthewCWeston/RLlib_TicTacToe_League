@@ -123,7 +123,7 @@ class SelfPlayCallback(RLlibCallback):
                     0,
                     window=1000,
                 )
-            loss_rates = np.append(loss_rates, [0.5])
+            loss_rates = np.append(loss_rates, [0.0]) # b/c of prop. issue
             main_module = algorithm.get_module("main")
             algorithm.add_module(
                 module_id=new_module_id,

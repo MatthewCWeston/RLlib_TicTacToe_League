@@ -99,11 +99,8 @@ class CMAPPOTorchLearner(CMAPPOLearner, TorchLearner):
         loss_per_module = {}
         # Calculate loss for agent policies
         for module_id in fwd_out:
-            if (module_id == SHARED_CRITIC_ID): # Already computed
-              continue
-            module_batch = batch[module_id]
-            module_fwd_out = fwd_out[module_id]
-
+            if (module_id == SHARED_CRITIC_ID):
+                loss_per_module[module_id] = self.compute_loss_for_critic(batch[module_id])
             module = self.module[module_id].unwrapped()
             if isinstance(module, SelfSupervisedLossAPI):
                 # For e.g. enabling intrinsic curiosity modules.
@@ -115,9 +112,8 @@ class CMAPPOTorchLearner(CMAPPOLearner, TorchLearner):
                     fwd_out=module_fwd_out,
                 )
             else:
-                if (SHARED_CRITIC_ID not in loss_per_module.keys()):
-                    loss_per_module[SHARED_CRITIC_ID] = 0
-                loss_per_module[SHARED_CRITIC_ID] += self.compute_loss_for_critic(module_batch)
+                module_batch = batch[module_id]
+                module_fwd_out = fwd_out[module_id]
                 # For every module we're going to touch, sans the critic
                 loss = self.compute_loss_for_module(
                     module_id=module_id,

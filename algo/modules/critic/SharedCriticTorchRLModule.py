@@ -24,7 +24,6 @@ from algo.modules.critic.SharedCriticCatalog import SharedCriticCatalog
 @DeveloperAPI
 class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
     def __init__(self, *args, **kwargs):
-        print("SCTRM")
         catalog_class = kwargs.pop("catalog_class", None)
         if catalog_class is None:
             catalog_class = SharedCriticCatalog

@@ -28,7 +28,7 @@ from ray.rllib.utils.typing import ModuleID, TensorType
 
 # our code
 from algo.constants import SHARED_CRITIC_ID
-from algo.CMAPPOGAEConnector import CMAPPOGAEConnector
+from algo.CMAPPOGAEConnector_new import CMAPPOGAEConnector
 
 
 class CMAPPOLearner(Learner):
@@ -67,10 +67,6 @@ class CMAPPOLearner(Learner):
             self._learner_connector is not None
             and self.config.add_default_connectors_to_learner_pipeline
         ):
-            # Before anything, add one ts to each episode (and record this in the loss
-            # mask, so that the computations at this extra ts are not used to compute
-            # the loss).
-            self._learner_connector.prepend(AddOneTsToEpisodesAndTruncate())
             # At the end of the pipeline (when the batch is already completed), add the
             # GAE connector, which performs a vf forward pass, then computes the GAE
             # computations, and puts the results of this (advantages, value targets)
