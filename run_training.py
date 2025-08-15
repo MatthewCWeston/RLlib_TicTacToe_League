@@ -121,14 +121,14 @@ config = (
         }
     )
     .multi_agent(
-          policies=['main','main_v0']+heuristics,
+          policies=['main','main_v0', SHARED_CRITIC_ID]+heuristics,
           policy_mapping_fn=agent_to_module_mapping_fn,
           # Only the learned policy should be trained.
-          policies_to_train=['main'],
+          policies_to_train=['main', SHARED_CRITIC_ID],
       )
     .training(
         learner_class=CMAPPOTorchLearner,
-        lr=args.lr,
+        lr=args.lr * args.num_learners**0.5, # The general rule for scaling up
         train_batch_size_per_learner=args.batch_size,
     )
     .rl_module(
@@ -164,7 +164,8 @@ for i in range(num_iters):
       for k in sorted(wrs.keys()):
         print(f"\t{k}")
         for k2 in ['Win','Draw','Loss']:
-          print(f"\t\t{k2}: {wrs[k][k2]:.2f}")
+          print(f"\t\t{k2}: {wrs[k][k2]:.2f}") 
+          
 '''
 
 
@@ -178,4 +179,4 @@ if (args.restore_checkpoint):
     assignRestoreCallback(args.restore_checkpoint, config)
 
 # Run the experiment.
-run_tune_training(config,args,stop=stop)
+run_tune_training(config,args,stop=stop) #'''
