@@ -108,7 +108,7 @@ config = (
         )
     )
     .env_runners(
-        num_env_runners=10,
+        num_env_runners=args.num_env_runners,
         batch_mode="complete_episodes", # use_logits needs this to work.
     )
     .evaluation(
@@ -128,7 +128,7 @@ config = (
       )
     .training(
         learner_class=CMAPPOTorchLearner,
-        lr=args.lr * args.num_learners**0.5, # The general rule for scaling up
+        lr=args.lr * args.num_env_runners**0.5, # The general rule for scaling up
         train_batch_size_per_learner=args.batch_size,
     )
     .rl_module(
