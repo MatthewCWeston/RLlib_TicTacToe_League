@@ -55,8 +55,8 @@ class SelfPlayCallback(RLlibCallback):
     def update_atm_fn(self, algorithm, loss_rates):
         #
         base_probs = loss_rates / loss_rates.sum()
-        # Divide up 10% among the zeroes
-        z = base_probs==0
+        # Divide up our lambda among the agents that are getting used less than it
+        z = base_probs<self._lambda
         if (z.any()):
             base_probs *= (1.0-self._lambda)
             base_probs += z / z.sum() * self._lambda

@@ -49,6 +49,7 @@ parser.add_argument("--restore-checkpoint", type=str)
 
 parser.add_argument("--self-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
 parser.add_argument("--other-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
+parser.add_argument("--identity-aug", action='store_true') # Overrides self and other augs
 
 args = parser.parse_args()
 
@@ -86,6 +87,7 @@ specs[SHARED_CRITIC_ID] = RLModuleSpec(
             "head_fcnet_hiddens": tuple(args.critic_fcnet),
             "self_aug": args.self_aug,
             "other_aug": args.other_aug,
+            "identity_aug": args.identity_aug,
             "logits_size": single_agent_env.action_spaces['X'].n, 
         },
     )

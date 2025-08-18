@@ -28,7 +28,7 @@ from ray.rllib.utils.typing import ModuleID, TensorType
 
 # our code
 from algo.constants import SHARED_CRITIC_ID
-from algo.CMAPPOGAEConnector_new import CMAPPOGAEConnector
+from algo.CMAPPOGAEConnector import CMAPPOGAEConnector
 
 
 class CMAPPOLearner(Learner):

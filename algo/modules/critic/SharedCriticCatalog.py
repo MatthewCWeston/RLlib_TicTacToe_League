@@ -1,5 +1,3 @@
-# @title SharedCriticCatalog (added logit handling)
-# __sphinx_doc_begin__
 import gymnasium as gym
 
 from ray.rllib.core.models.catalog import Catalog
@@ -24,6 +22,9 @@ mult_dict = {
     None: 0
 }
 
+# A reasonable embedding size for testing? Let's find out.
+ID_EMBEDDING_SIZE = 64
+
 class SharedCriticCatalog(Catalog):
     def __init__(
         self,
@@ -46,11 +47,15 @@ class SharedCriticCatalog(Catalog):
         # Are we expecting action logits?
         self.self_aug = self._model_config_dict["self_aug"] if "self_aug" in self._model_config_dict else None
         self.other_aug = self._model_config_dict["other_aug"] if "other_aug" in self._model_config_dict else None
+        self.identity_aug = self._model_config_dict["identity_aug"] if "identity_aug" in self._model_config_dict else False
         self.self_aug_size = self._model_config_dict["logits_size"]*mult_dict[self.self_aug]
-        self.aug_size = self.self_aug_size + self._model_config_dict["logits_size"]*mult_dict[self.other_aug]
+        if (self.identity_aug): # augment with opponent identity
+          self.aug_size = self._model_config_dict["logits_size"]
+          self._encoder_config.input_dims = (self._encoder_config.input_dims[0] + ID_EMBEDDING_SIZE,)
+        else: # Augment with logits/actions
+          self.aug_size = self.self_aug_size + self._model_config_dict["logits_size"]*mult_dict[self.other_aug]
+          self._encoder_config.input_dims = (self.aug_size + self._encoder_config.input_dims[0],)
         print(f"Aug size: {self.aug_size}")
-        if (self.aug_size):
-            self._encoder_config.input_dims = (self.aug_size + self._encoder_config.input_dims[0],)
         # We only want one encoder, so don't make a separate one for an actor that doesn't exist. We should switch to base_encoder_config at some point.
         self._encoder_config.shared = True
         # Replace EncoderConfig by ActorCriticEncoderConfig

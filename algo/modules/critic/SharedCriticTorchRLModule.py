@@ -1,4 +1,3 @@
-# @title SharedCriticTorchRLModule (added logit handling)
 import typing
 from typing import Any, Optional
 
@@ -19,7 +18,7 @@ torch, nn = try_import_torch()
 # our code
 from algo.constants import AGENT_LOGITS
 from algo.modules.critic.SharedCriticRLModule import SharedCriticRLModule
-from algo.modules.critic.SharedCriticCatalog import SharedCriticCatalog
+from algo.modules.critic.SharedCriticCatalog import SharedCriticCatalog, ID_EMBEDDING_SIZE
 
 @DeveloperAPI
 class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
@@ -28,6 +27,8 @@ class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
         if catalog_class is None:
             catalog_class = SharedCriticCatalog
         super().__init__(*args, **kwargs, catalog_class=catalog_class)
+        if (self.identity_aug):
+            self.identity_emb = nn.Embedding(self.aug_size, ID_EMBEDDING_SIZE)
 
     @override(ValueFunctionAPI)
     def compute_values(
@@ -35,7 +36,10 @@ class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
         batch: typing.Dict[str, Any],
         embeddings: Optional[Any] = None,
     ) -> TensorType:
-        if (self.self_aug or self.other_aug): # Replace batch with augmented batch
+        if (self.identity_aug):
+            identity_emb = self.identity_emb(batch[AGENT_LOGITS])
+            batch = {Columns.OBS: torch.cat((batch[Columns.OBS], identity_emb), dim=1)}
+        elif (self.self_aug or self.other_aug): # Replace batch with augmented batch
             batch = {Columns.OBS: torch.cat((batch[Columns.OBS], batch[AGENT_LOGITS]), dim=1)}
         if embeddings is None:
             embeddings = self.encoder(batch)[ENCODER_OUT][CRITIC]

@@ -21,13 +21,12 @@ from ray.rllib.utils.postprocessing.zero_padding import (
 from ray.rllib.utils.typing import EpisodeType
 
 # From our code
-from algo.constants import SHARED_CRITIC_ID, AGENT_LOGITS, OBSERVATIONS
+from algo.constants import SHARED_CRITIC_ID, AGENT_LOGITS, OBSERVATIONS, ACTION_MASK
 from algo.modules.critic.SharedCriticCatalog import (
     LOGITS,
     ACTIONS,
     LOGITS_AND_ACTIONS,
 )
-
 
 class CMAPPOGAEConnector(ConnectorV2):
     def __init__(
@@ -44,7 +43,8 @@ class CMAPPOGAEConnector(ConnectorV2):
         self.aug_fn_dict = {
             LOGITS: self.get_logits,
             ACTIONS: self.get_actions,
-            LOGITS_AND_ACTIONS: self.get_logits_and_actions
+            LOGITS_AND_ACTIONS: self.get_logits_and_actions,
+            None: None
         }
         # Internal numpy-to-tensor connector to translate GAE results (advantages and
         # vf targets) into tensors.
@@ -62,17 +62,16 @@ class CMAPPOGAEConnector(ConnectorV2):
       actions = self.get_actions(batch, mid, s, l)
       return torch.cat((actions, logits), dim=1)
 
-    def augment_critic(self, batch, meps, aug_fn_self, aug_fn_othr, aug_size):
+    def augment_critic(self, batch, meps, aug_fn_self, aug_fn_othr, aug_size, self_aug_size):
+      print("augmenting critic without identity")
       for aid in batch:
         # Initialize next two action logit sets
         b_lgts = batch[aid][Columns.ACTION_DIST_INPUTS]
-        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0], aug_size)).to(b_lgts.device) # Create logit predictions
+        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0], aug_size)).to(b_lgts.device) # Create tensors to store logits
       start_indices = defaultdict(lambda: 0) # where to start in each agent's batch, when populating next action logits for critic
+      lc = 0
       for mep in meps:
         x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
-        assert x_ep.agent_id == 'X' # These episodes complete a game.
-        assert o_ep.agent_id == 'O'
-        assert x_ep.multi_agent_episode_id == o_ep.multi_agent_episode_id
         x_mid, o_mid = x_ep.module_id, o_ep.module_id
         x_l, o_l = len(x_ep), len(o_ep)
         # Start indices. We alternate because we might have the same module.
@@ -80,26 +79,173 @@ class CMAPPOGAEConnector(ConnectorV2):
         start_indices[x_mid]+=x_l
         o_s = start_indices[o_mid]
         start_indices[o_mid]+=o_l
-        # Grab aug vectors
-        x_aug_self, o_aug_self = aug_fn_self(batch, x_mid, x_s, x_l), aug_fn_self(batch, o_mid, o_s, o_l)
-        x_aug_othr, o_aug_othr = aug_fn_othr(batch, x_mid, x_s, x_l), aug_fn_othr(batch, o_mid, o_s, o_l)
-        # Double-check that we have the right swath by comparing observations. Can comment out once we're sure.
-        x_ep_obs = np.stack([o[OBSERVATIONS] for o in x_ep.observations][:x_l])
-        tmp = np.array(batch[x_mid][Columns.OBS][OBSERVATIONS][x_s:x_s+x_l].cpu())
-        assert np.abs(tmp-x_ep_obs).sum() == 0
-        o_ep_obs = np.stack([o[OBSERVATIONS] for o in o_ep.observations][:o_l])
-        tmp = np.array(batch[o_mid][Columns.OBS][OBSERVATIONS][o_s:o_s+o_l].cpu())
-        assert np.abs(tmp-o_ep_obs).sum() == 0
-        # Set the aug values
-        lc = x_aug_self.shape[1]
-        # First half of X's logits are X's aug.
-        batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l, :lc] = x_aug_self
-        # Second half of X's aug are O's corresponding aug.
-        batch[x_mid][AGENT_LOGITS][x_s:x_s+o_l, lc:] = o_aug_othr
-        # First half of O's aug are O's aug
-        batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l, :lc] = o_aug_self
-        # Second half of O's aug are X's aug downshifted by 1.
-        batch[o_mid][AGENT_LOGITS][o_s:o_s+(x_l-1), lc:] = x_aug_othr[1:]
+        # Grab aug vectors. 'self' and 'other' now refer to the main module and its opponent.
+        use_next = 1 # Use the action of the next agent (ensures we'll always see something from the varied opponent)
+        if (x_mid=='main'):
+            if (aug_fn_self):
+                aug = aug_fn_self(batch, x_mid, x_s, x_l)
+                # First part of X's aug and O's aug come from X
+                batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l, :self_aug_size] = aug
+                batch[o_mid][AGENT_LOGITS][o_s:o_s+(x_l-1), :self_aug_size] = aug[1:] * use_next
+            if (aug_fn_othr):
+                aug = aug_fn_othr(batch, o_mid, o_s, o_l)
+                # Second parts of X's aug and O's aug come from O
+                batch[x_mid][AGENT_LOGITS][x_s:x_s+o_l, self_aug_size:] = aug * use_next
+                batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l, self_aug_size:] = aug
+        else:
+            if (aug_fn_self):
+                aug = aug_fn_self(batch, o_mid, o_s, o_l)
+                # First part of X's aug and O's aug come from O
+                batch[x_mid][AGENT_LOGITS][x_s:x_s+o_l, :self_aug_size] = aug * use_next
+                batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l, :self_aug_size] = aug
+            if (aug_fn_othr):
+                aug = aug_fn_othr(batch, x_mid, x_s, x_l)
+                # Second parts of X's aug and O's aug come from X
+                batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l, self_aug_size:] = aug
+                batch[o_mid][AGENT_LOGITS][o_s:o_s+(x_l-1), self_aug_size:] = aug[1:] * use_next
+
+    def augment_critic_identity(self, batch, meps, aug_size):
+      '''
+          Provides the critic with a one-hot vector indicating the opponent's identity.
+      '''
+      print("augmenting critic with identity")
+      for aid in batch:
+        # Initialize next two action logit sets
+        b_lgts = batch[aid][Columns.ACTION_DIST_INPUTS]
+        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0],), dtype=torch.long).to(b_lgts.device)
+      start_indices = defaultdict(lambda: 0) # where to start in each agent's batch, when populating next action logits for critic
+      lc = 0
+      for mep in meps:
+        x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
+        x_mid, o_mid = x_ep.module_id, o_ep.module_id
+        x_l, o_l = len(x_ep), len(o_ep)
+        # Start indices. We alternate because we might have the same module.
+        x_s = start_indices[x_mid]
+        start_indices[x_mid]+=x_l
+        o_s = start_indices[o_mid]
+        start_indices[o_mid]+=o_l
+        other_mid = int((x_mid if o_mid=='main' else o_mid).split('main_v')[-1])
+        # First part of X's aug and O's aug come from X
+        batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l] = other_mid
+        batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l] = other_mid
+
+    def call_with_interleaving(
+        self,
+        rl_module: MultiRLModule,
+        episodes: List[EpisodeType],
+        batch: Dict[str, Any],
+        **kwargs,
+    ):
+        sc = rl_module[SHARED_CRITIC_ID]
+        # Get total length
+        tl = 0
+        obs_size = 0
+        device = batch['main'][ACTION_MASK].device
+        am_size = batch['main'][ACTION_MASK].shape[1]
+        for mid, b in batch.items():
+          if (Columns.OBS in b):
+            obs_shp = b[Columns.OBS].shape
+            obs_size = obs_shp[1]
+            tl += obs_shp[0]
+        # Create the critic's own batch
+        critic_batch = {Columns.OBS: torch.zeros((tl, obs_size)), ACTION_MASK: torch.zeros((tl, am_size)), Columns.REWARDS: torch.zeros((tl)), Columns.TERMINATEDS: torch.full((tl,), False), Columns.TRUNCATEDS: torch.full((tl,), False)}
+        cb_s = 0 # start index for critic_batch
+        # for splitting the list later
+        module_ixs = defaultdict(lambda: [])
+        start_indices = defaultdict(lambda: 0) # where to start in each batch
+        cols_to_interleave = [Columns.OBS, Columns.REWARDS, Columns.TERMINATEDS, Columns.TRUNCATEDS]
+        # Augment observations if requested
+        if (sc.identity_aug):
+          self.augment_critic_identity(batch, episodes, sc.aug_size)
+          critic_batch[AGENT_LOGITS] = torch.zeros((tl,), dtype=torch.long)
+        else:
+          sa, oa = self.aug_fn_dict[sc.self_aug], self.aug_fn_dict[sc.other_aug]
+          self.augment_critic(batch, episodes, sa, oa, sc.aug_size, sc.self_aug_size)
+          critic_batch[AGENT_LOGITS] = torch.zeros((tl, batch['main'][AGENT_LOGITS].shape[1]))
+        if (AGENT_LOGITS in batch['main']):
+          cols_to_interleave.append(AGENT_LOGITS)
+        for k, v in critic_batch.items(): # critic batch to device
+            critic_batch[k] = v.to(device)
+        for mep in episodes: # populate critic batch
+          x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
+          x_mid, o_mid = x_ep.module_id, o_ep.module_id
+          x_l, o_l = len(x_ep), len(o_ep)
+          x_s, o_s = start_indices[x_mid], start_indices[o_mid]
+          # Set indices (in critic_batch) for each episode to be sent into
+          # x gets start index and then counts up by 2, o gets 1 and then same
+          x_ixs = torch.arange(cb_s, cb_s+x_l+o_l, 2)
+          o_ixs = torch.arange(cb_s+1, cb_s+x_l+o_l, 2)
+          start_indices[x_mid]+=x_l
+          start_indices[o_mid]+=o_l
+          cb_s += x_l + o_l
+          # Set main/other eps
+          if (x_mid=='main'):
+            main_ep, other_ep = x_ep, o_ep
+            m_ixs, o_ixs = x_ixs, o_ixs
+            m_s, m_l, o_s, o_l = x_s, x_l, o_s, o_l
+          else:
+            main_ep, other_ep = o_ep, x_ep
+            m_ixs, o_ixs = o_ixs, x_ixs
+            m_s, m_l, o_s, o_l = o_s, o_l, x_s, x_l
+            o_mid = x_mid
+          mb, ob = batch['main'], batch[o_mid]
+          # Track indices for sending back advantages and VTs
+          module_ixs['main'].extend(m_ixs)
+          module_ixs[o_mid].extend(o_ixs)
+          # Get data, populate critic_batch
+          for c in cols_to_interleave:
+            m_data, o_data = mb[c][m_s:m_s+m_l], ob[c][o_s:o_s+o_l]
+            # Handle special cases (maybe go by main/other rather than x/o)
+            if (c == Columns.OBS):
+              # Invert observation of non-main agent
+              o_data = torch.cat((o_data[:,9:], o_data[:,:9]), dim=1)
+            elif (c == Columns.REWARDS): # Invert opponent rewards
+              o_data *= -1
+            if (c not in [Columns.OBS, AGENT_LOGITS]):
+              # Ignore termination flags that aren't the last one, and the reward given to the agent that didn't move last
+              if (m_ixs[-1] > o_ixs[-1]):
+                critic_batch[c][m_ixs] = m_data
+              else:
+                critic_batch[c][o_ixs] = o_data
+            else:
+              # Put data into critic batch
+              critic_batch[c][m_ixs], critic_batch[c][o_ixs] = m_data, o_data
+        # Calculate value targets
+        with torch.no_grad():
+          vf_preds = sc.compute_values(critic_batch)
+        #
+        vf_preds = convert_to_numpy(vf_preds)
+        value_targets = compute_value_targets(
+            values=vf_preds,
+            rewards=convert_to_numpy(critic_batch[Columns.REWARDS]),
+            terminateds=convert_to_numpy(critic_batch[Columns.TERMINATEDS]),
+            truncateds=convert_to_numpy(critic_batch[Columns.TRUNCATEDS]),
+            gamma=self.gamma,
+            lambda_=self.lambda_,
+        )
+        advantages = value_targets - vf_preds
+        advantages = (advantages - advantages.mean()) / max(
+            1e-4, advantages.std()
+        )
+        critic_batch[Postprocessing.VALUE_TARGETS] = value_targets
+        critic_batch[Postprocessing.ADVANTAGES] = advantages # temp
+        # Get VTs for each module. Remember to reverse VTs for non-main module
+        #for mid, ixs, mult in zip(['main', o_mid], [m_ixs, o_ixs], [1,-1]):
+        for mid in batch.keys():
+          module = rl_module[mid]
+          if (mid == SHARED_CRITIC_ID) or not isinstance(module, TorchRLModule):
+            continue
+          #
+          mult = 1 if mid == 'main' else -1 # Negate other modules' VTs
+          ixs = module_ixs[mid]
+          module_advantages= advantages[ixs]*mult
+          module_vts= value_targets[ixs]*mult
+          # Set module VTs and advantages
+          batch[mid][Postprocessing.ADVANTAGES] = module_advantages
+          batch[mid][Postprocessing.VALUE_TARGETS] = module_vts
+        # Add critic batch
+        batch[SHARED_CRITIC_ID] = critic_batch
+        return device
 
     @override(ConnectorV2)
     def __call__(
@@ -110,105 +256,15 @@ class CMAPPOGAEConnector(ConnectorV2):
         batch: Dict[str, Any],
         **kwargs,
     ):
-        # Device to place all GAE result tensors (advantages and value targets) on.
-        device = None
-        # Extract all single-agent episodes.
-        sa_episodes_list = list(
-            self.single_agent_episode_iterator(episodes, agents_that_stepped_only=False)
-        )
-        # Gather logits for next two actions, to inform critic about policies
-        sc = rl_module[SHARED_CRITIC_ID]
-        sa, oa = self.aug_fn_dict[sc.self_aug], self.aug_fn_dict[sc.other_aug]
-        if (sa or oa):
-          self.augment_critic(batch, episodes, sa, oa, sc.aug_size)
-        # Perform the value net's forward pass.
-        # Our only modification to the original - we use the shared critic to compute value, rather than the individual networks
-        # When we add logits, we should also add other_agent_logits to each agent's associated batch.
-        # Would probably suffice to get them from the main, un-processed logit buffers. The only observation that shouldn't have both is the terminating one, and it's easy to just mask it out based on terminations.
-        # multi_agent_episode_id could serve as a fallback here.
-        shared_critic = rl_module[SHARED_CRITIC_ID]
-        vf_preds = rl_module.foreach_module(
-            func=lambda mid, module: (
-                # The critic class itself should handle the use of logits
-                shared_critic.compute_values(batch[mid])
-                if mid in batch and (mid != SHARED_CRITIC_ID) # not critic
-                and isinstance(module, TorchRLModule) # trainable torch module
-                else None
-            ),
-            return_dict=True,
-        )
-        # Loop through all modules and perform each one's GAE computation.
-        for module_id, module_vf_preds in vf_preds.items():
-            # Skip those outputs of RLModules that are not implementers of
-            # `ValueFunctionAPI`.
-            if module_vf_preds is None:
-                continue
-
-            module = rl_module[module_id]
-            device = module_vf_preds.device
-            # Convert to numpy for the upcoming GAE computations.
-            module_vf_preds = convert_to_numpy(module_vf_preds)
-
-            # Collect (single-agent) episode lengths for this particular module.
-            episode_lens = [
-                len(e) for e in sa_episodes_list if e.module_id in [None, module_id]
-            ]
-
-            # Remove all zero-padding again, if applicable, for the upcoming
-            # GAE computations.
-            # Unpadding doesn't matter here.
-            module_vf_preds = unpad_data_if_necessary(episode_lens, module_vf_preds)
-            # Compute value targets.
-            module_value_targets = compute_value_targets(
-                values=module_vf_preds,
-                rewards=unpad_data_if_necessary(
-                    episode_lens,
-                    convert_to_numpy(batch[module_id][Columns.REWARDS]),
-                ),
-                terminateds=unpad_data_if_necessary(
-                    episode_lens,
-                    convert_to_numpy(batch[module_id][Columns.TERMINATEDS]),
-                ),
-                truncateds=unpad_data_if_necessary(
-                    episode_lens,
-                    convert_to_numpy(batch[module_id][Columns.TRUNCATEDS]),
-                ),
-                gamma=self.gamma,
-                lambda_=self.lambda_,
-            )
-            assert module_value_targets.shape[0] == sum(episode_lens)
-
-            module_advantages = module_value_targets - module_vf_preds
-            # Drop vf-preds, not needed in loss. Note that in the DefaultPPORLModule,
-            # vf-preds are recomputed with each `forward_train` call anyway to compute
-            # the vf loss.
-            # Standardize advantages (used for more stable and better weighted
-            # policy gradient computations).
-            module_advantages = (module_advantages - module_advantages.mean()) / max(
-                1e-4, module_advantages.std()
-            )
-
-            # Zero-pad the new computations, if necessary.
-            if module.is_stateful():
-                module_advantages = np.stack(
-                    split_and_zero_pad_n_episodes(
-                        module_advantages,
-                        episode_lens=episode_lens,
-                        max_seq_len=module.model_config["max_seq_len"],
-                    ),
-                    axis=0,
-                )
-                module_value_targets = np.stack(
-                    split_and_zero_pad_n_episodes(
-                        module_value_targets,
-                        episode_lens=episode_lens,
-                        max_seq_len=module.model_config["max_seq_len"],
-                    ),
-                    axis=0,
-                )
-            batch[module_id][Postprocessing.ADVANTAGES] = module_advantages
-            batch[module_id][Postprocessing.VALUE_TARGETS] = module_value_targets
-
+        # Reformat to purge action masks (since we run value computation on the critic's batch, this doesn't happen automatically for other modules)
+        for mid, module_batch in batch.items():
+          if (Columns.OBS in module_batch):
+            cobs = module_batch[Columns.OBS]
+            if (ACTION_MASK in cobs): # Action-masking
+              module_batch[Columns.OBS] = cobs[OBSERVATIONS]
+              module_batch[ACTION_MASK] = cobs[ACTION_MASK]
+        # Compute module value targets and advantages with interleaving
+        device = self.call_with_interleaving(rl_module,episodes,batch,**kwargs)
         # Convert all GAE results to tensors.
         if self._numpy_to_tensor_connector is None:
             self._numpy_to_tensor_connector = NumpyToTensor(
@@ -224,7 +280,7 @@ class CMAPPOGAEConnector(ConnectorV2):
                     ),
                 }
                 for mid, module_batch in batch.items()
-                if vf_preds[mid] is not None
+                if (Postprocessing.ADVANTAGES in batch[mid])
             },
             episodes=episodes,
         )
