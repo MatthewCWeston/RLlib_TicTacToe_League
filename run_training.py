@@ -50,6 +50,7 @@ parser.add_argument("--restore-checkpoint", type=str)
 parser.add_argument("--self-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
 parser.add_argument("--other-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
 parser.add_argument("--identity-aug", action='store_true') # Overrides self and other augs
+parser.add_argument("--max-league-size", type=int, default=32)
 
 args = parser.parse_args()
 
@@ -88,7 +89,7 @@ specs[SHARED_CRITIC_ID] = RLModuleSpec(
             "self_aug": args.self_aug,
             "other_aug": args.other_aug,
             "identity_aug": args.identity_aug,
-            "logits_size": single_agent_env.action_spaces['X'].n, 
+            "logits_size": single_agent_env.action_spaces['X'].n if (not args.identity_aug) else args.max_league_size, 
         },
     )
 
@@ -106,7 +107,8 @@ config = (
     .callbacks( # set up our league
         functools.partial(SelfPlayCallback,
             win_rate_threshold=win_rate_threshold,
-            _lambda=0.1 # Total probability to allocate to agents with zero WR vs main
+            _lambda=0.1, # Total probability to allocate to agents with zero WR vs main
+            max_league_size=args.max_league_size
         )
     )
     .env_runners(
@@ -130,7 +132,7 @@ config = (
       )
     .training(
         learner_class=CMAPPOTorchLearner,
-        lr=args.lr * args.num_env_runners**0.5, # The general rule for scaling up
+        lr=args.lr,
         train_batch_size_per_learner=args.batch_size,
     )
     .rl_module(

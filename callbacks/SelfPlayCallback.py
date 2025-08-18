@@ -11,12 +11,13 @@ from ray.rllib.utils.metrics import ENV_RUNNER_RESULTS
 
 
 class SelfPlayCallback(RLlibCallback):
-    def __init__(self, win_rate_threshold, _lambda):
+    def __init__(self, win_rate_threshold, _lambda=0.1, max_league_size=32):
         super().__init__()
         # 0=main_v0, 1=main_v1, 2=2nd main policy snapshot, etc..
         self.current_opponent = 0
         self.win_rate_threshold = win_rate_threshold
         self._lambda = _lambda
+        self.max_league_size = max_league_size
         # Report the matchup counters (who played against whom?).
         self._matching_stats = defaultdict(int)
         # Hacky fix for the new agent WR bug
@@ -103,7 +104,9 @@ class SelfPlayCallback(RLlibCallback):
         # If win rate is good versus the most recent opponent -> Snapshot current policy and play against
         # it next, keeping the snapshot fixed and only improving the "main"
         # policy.
-        if (self.just_added):
+        if (self.current_opponent+2 == self.max_league_size):
+            print("maximum league size has been reached.")
+        elif (self.just_added):
             self.just_added = False
             print("just added new agent; allowing an epoch to propagate.")
         elif f_wr > 0 and worst_ratio > self.win_rate_threshold:

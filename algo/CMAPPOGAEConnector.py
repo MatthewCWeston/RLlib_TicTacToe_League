@@ -63,7 +63,6 @@ class CMAPPOGAEConnector(ConnectorV2):
       return torch.cat((actions, logits), dim=1)
 
     def augment_critic(self, batch, meps, aug_fn_self, aug_fn_othr, aug_size, self_aug_size):
-      print("augmenting critic without identity")
       for aid in batch:
         # Initialize next two action logit sets
         b_lgts = batch[aid][Columns.ACTION_DIST_INPUTS]
@@ -108,11 +107,10 @@ class CMAPPOGAEConnector(ConnectorV2):
       '''
           Provides the critic with a one-hot vector indicating the opponent's identity.
       '''
-      print("augmenting critic with identity")
       for aid in batch:
         # Initialize next two action logit sets
         b_lgts = batch[aid][Columns.ACTION_DIST_INPUTS]
-        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0],), dtype=torch.long).to(b_lgts.device)
+        batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0],aug_size), dtype=torch.long).to(b_lgts.device)
       start_indices = defaultdict(lambda: 0) # where to start in each agent's batch, when populating next action logits for critic
       lc = 0
       for mep in meps:
@@ -125,6 +123,7 @@ class CMAPPOGAEConnector(ConnectorV2):
         o_s = start_indices[o_mid]
         start_indices[o_mid]+=o_l
         other_mid = int((x_mid if o_mid=='main' else o_mid).split('main_v')[-1])
+        other_mid = torch.nn.functional.one_hot(torch.tensor(other_mid), aug_size)
         # First part of X's aug and O's aug come from X
         batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l] = other_mid
         batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l] = other_mid
@@ -157,7 +156,7 @@ class CMAPPOGAEConnector(ConnectorV2):
         # Augment observations if requested
         if (sc.identity_aug):
           self.augment_critic_identity(batch, episodes, sc.aug_size)
-          critic_batch[AGENT_LOGITS] = torch.zeros((tl,), dtype=torch.long)
+          critic_batch[AGENT_LOGITS] = torch.zeros((tl, batch['main'][AGENT_LOGITS].shape[1]), dtype=torch.long)
         else:
           sa, oa = self.aug_fn_dict[sc.self_aug], self.aug_fn_dict[sc.other_aug]
           self.augment_critic(batch, episodes, sa, oa, sc.aug_size, sc.self_aug_size)
