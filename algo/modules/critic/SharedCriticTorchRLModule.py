@@ -44,5 +44,16 @@ class SharedCriticTorchRLModule(TorchRLModule, SharedCriticRLModule):
             embeddings = self.encoder(batch)[ENCODER_OUT][CRITIC]
         # Value head.
         vf_out = self.vf(embeddings)
+        # Debugging for propagation of embeddings
+        if (vf_out.shape[0] > 128 and self.identity_aug):
+            print('='*20)
+            print("COMPUTE VALUES CALLED")
+            print(self.encoder.encoder.net.mlp[0].weight.abs().sum(dim=0)[-self.aug_size:])
         # Squeeze out last dimension (single node value head).
         return vf_out.squeeze(-1)
+    
+    def new_agent_embedding(self, ix):
+        ''' Set embedding at index ix to embedding at index ix-1 (a new frozen policy was initialized) '''
+        with torch.no_grad():
+            first_layer = self.encoder.encoder.net.mlp[0].weight
+            first_layer[:, ix] = first_layer[:, ix-1].clone()

@@ -28,7 +28,21 @@ from algo.modules.critic.SharedCriticCatalog import (
     LOGITS_AND_ACTIONS,
 )
 
+# debug
+from environments.TicTacToe import display_board
+from collections import defaultdict
+
 class CMAPPOGAEConnector(ConnectorV2):
+    '''
+        Convention for shared critic:
+         - The 'viewpoint' player is main if the game is main v other, and X if the game is main v main.
+            - We do this by checking if X's mid is 'main'. All checks for which is main should do this.
+         - ID = 0 for main, 1 for exploiter, ID+2 for PFSP
+         - How does interleaving work here? Do we need to deinterleave differently? (test with self-play)
+         
+         Other improvements:
+          - In the self-play loop, we can set the weights for the Xth section equal to the weights of the X-1th section when a new agent is added.
+    '''
     def __init__(
         self,
         input_observation_space=None,
@@ -113,6 +127,7 @@ class CMAPPOGAEConnector(ConnectorV2):
         batch[aid][AGENT_LOGITS] = torch.zeros((b_lgts.shape[0],aug_size), dtype=torch.long).to(b_lgts.device)
       start_indices = defaultdict(lambda: 0) # where to start in each agent's batch, when populating next action logits for critic
       lc = 0
+      other_mids = defaultdict(lambda:0)
       for mep in meps:
         x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
         x_mid, o_mid = x_ep.module_id, o_ep.module_id
@@ -122,11 +137,18 @@ class CMAPPOGAEConnector(ConnectorV2):
         start_indices[x_mid]+=x_l
         o_s = start_indices[o_mid]
         start_indices[o_mid]+=o_l
-        other_mid = int((x_mid if o_mid=='main' else o_mid).split('main_v')[-1])
+        other_mid = (o_mid if x_mid=='main' else x_mid)
+        if ('main_v' in other_mid):
+            other_mid = int(other_mid.split('main_v')[-1]) + 2
+        else:
+            other_mid = 0 if other_mid=='main' else 1
+        other_mids[other_mid] += 1
         other_mid = torch.nn.functional.one_hot(torch.tensor(other_mid), aug_size)
         # First part of X's aug and O's aug come from X
         batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l] = other_mid
         batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l] = other_mid
+      print("Other module appearances this epoch: ")
+      print(other_mids)
 
     def call_with_interleaving(
         self,
@@ -152,6 +174,7 @@ class CMAPPOGAEConnector(ConnectorV2):
         # for splitting the list later
         module_ixs = defaultdict(lambda: [])
         start_indices = defaultdict(lambda: 0) # where to start in each batch
+        multipliers = np.ones((tl,)) # 
         cols_to_interleave = [Columns.OBS, Columns.REWARDS, Columns.TERMINATEDS, Columns.TRUNCATEDS]
         # Augment observations if requested
         if (sc.identity_aug):
@@ -168,14 +191,16 @@ class CMAPPOGAEConnector(ConnectorV2):
         for mep in episodes: # populate critic batch
           x_ep, o_ep = mep.agent_episodes['X'], mep.agent_episodes['O']
           x_mid, o_mid = x_ep.module_id, o_ep.module_id
+          # We need to handle main v main. X goes first, so update X's pointer before accessing O.
           x_l, o_l = len(x_ep), len(o_ep)
-          x_s, o_s = start_indices[x_mid], start_indices[o_mid]
+          x_s = start_indices[x_mid]
+          start_indices[x_mid]+=x_l
+          o_s = start_indices[o_mid]
+          start_indices[o_mid]+=o_l
           # Set indices (in critic_batch) for each episode to be sent into
           # x gets start index and then counts up by 2, o gets 1 and then same
           x_ixs = torch.arange(cb_s, cb_s+x_l+o_l, 2)
           o_ixs = torch.arange(cb_s+1, cb_s+x_l+o_l, 2)
-          start_indices[x_mid]+=x_l
-          start_indices[o_mid]+=o_l
           cb_s += x_l + o_l
           # Set main/other eps
           if (x_mid=='main'):
@@ -209,6 +234,7 @@ class CMAPPOGAEConnector(ConnectorV2):
             else:
               # Put data into critic batch
               critic_batch[c][m_ixs], critic_batch[c][o_ixs] = m_data, o_data
+              multipliers[o_ixs] = -1 # multiply values at opponent indices by negative 1.
         # Calculate value targets
         with torch.no_grad():
           vf_preds = sc.compute_values(critic_batch)
@@ -228,22 +254,39 @@ class CMAPPOGAEConnector(ConnectorV2):
         )
         critic_batch[Postprocessing.VALUE_TARGETS] = value_targets
         critic_batch[Postprocessing.ADVANTAGES] = advantages # temp
+        # Negate value targets (not used) and advantages for actors
+        actor_value_targets = value_targets * multipliers
+        actor_advantages = advantages * multipliers
         # Get VTs for each module. Remember to reverse VTs for non-main module
         #for mid, ixs, mult in zip(['main', o_mid], [m_ixs, o_ixs], [1,-1]):
         for mid in batch.keys():
           module = rl_module[mid]
           if (mid == SHARED_CRITIC_ID) or not isinstance(module, TorchRLModule):
             continue
-          #
-          mult = 1 if mid == 'main' else -1 # Negate other modules' VTs
+          # multiplier is 1 if mid is main and (both are not main OR batch is X).
           ixs = module_ixs[mid]
+          module_advantages= actor_advantages[ixs]
+          module_vts= actor_value_targets[ixs]
+          '''mult = 1 if mid == 'main' else -1 # Negate other modules' VTs
           module_advantages= advantages[ixs]*mult
-          module_vts= value_targets[ixs]*mult
+          module_vts= value_targets[ixs]*mult'''
           # Set module VTs and advantages
           batch[mid][Postprocessing.ADVANTAGES] = module_advantages
           batch[mid][Postprocessing.VALUE_TARGETS] = module_vts
         # Add critic batch
         batch[SHARED_CRITIC_ID] = critic_batch
+        '''# Display code
+        for i in range(20):
+          print(f'R: {critic_batch[Columns.REWARDS][i]} VT: {critic_batch[Postprocessing.VALUE_TARGETS][i]}')
+          print(critic_batch[Columns.TERMINATEDS][i])
+          display_board(critic_batch[Columns.OBS][i])
+        # Display code
+        print("MAIN")
+        for i in range(20):
+          print(f'R: {batch["main"][Columns.REWARDS][i]} VT: {batch["main"][Postprocessing.VALUE_TARGETS][i]}')
+          print(batch['main'][Columns.TERMINATEDS][i])
+          display_board(batch['main'][Columns.OBS][i])
+        raise Exception() # '''
         return device
 
     @override(ConnectorV2)

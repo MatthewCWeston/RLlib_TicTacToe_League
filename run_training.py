@@ -1,4 +1,3 @@
-# @title config_league
 import numpy as np
 import functools
 
@@ -15,7 +14,7 @@ from environments.TicTacToe import *
 from classes.heuristics import RandHeuristicRLM, BlockWinHeuristicRLM, PerfectHeuristicRLM
 
 from callbacks.custom_eval_function import custom_eval_function
-from callbacks.SelfPlayCallback import SelfPlayCallback
+from callbacks.SelfPlayCallback import SelfPlayCallback, create_atm_fn
 
 from algo.modules.CMAPPOActionMaskingTorchRLModule import CMAPPOActionMaskingTorchRLModule
 from algo.modules.critic.ActionMaskingSharedCriticTorchRLModule import *
@@ -51,9 +50,22 @@ parser.add_argument("--self-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
 parser.add_argument("--other-aug", choices=[LOGITS, ACTIONS, LOGITS_AND_ACTIONS])
 parser.add_argument("--identity-aug", action='store_true') # Overrides self and other augs
 parser.add_argument("--max-league-size", type=int, default=32)
+parser.add_argument("--win-threshold", type=float, default=0.95)
+
+parser.add_argument("--exploiter-rate", type=float, default=0.15)
+parser.add_argument("--self-play-rate", type=float, default=0.35)
 
 args = parser.parse_args()
 
+win_rate_threshold = args.win_threshold # wins / wins+losses, wins > 2
+atm_fn = create_atm_fn(1, args.exploiter_rate, args.self_play_rate, None)
+
+sp_callback = functools.partial(SelfPlayCallback,
+    win_rate_threshold=win_rate_threshold,
+    _lambda=0.1,
+    self_play=args.self_play_rate,
+    exploiter=args.exploiter_rate,
+)
 
 specs = {
     "rand": RLModuleSpec(
@@ -68,9 +80,9 @@ specs = {
 }
 heuristics = list(specs.keys())
 
-for n in ['main', 'main_v0']: # default frozen policy, and first learned policy
+for n in ['main', 'main_exploiter', 'main_v0']:
     p = n
-    specs[p] =  RLModuleSpec(
+    specs[p] = RLModuleSpec(
         module_class=CMAPPOActionMaskingTorchRLModule,
         model_config={
             "head_fcnet_hiddens": (64,64),
@@ -80,36 +92,26 @@ for n in ['main', 'main_v0']: # default frozen policy, and first learned policy
 # Shared critic. Might seem moot when training only one agent, but we can use it to neatly augment critic outputs with logits, and maybe use frozen opponents' results to train the critic too.
 single_agent_env = TicTacToe()
 specs[SHARED_CRITIC_ID] = RLModuleSpec(
-        module_class=ActionMaskingSharedCriticTorchRLModule,
-        observation_space=single_agent_env.observation_spaces['X'],
-        action_space=single_agent_env.action_spaces['X'],
-        learner_only=True, # Only build on learner
-        model_config={
-            "head_fcnet_hiddens": tuple(args.critic_fcnet),
-            "self_aug": args.self_aug,
-            "other_aug": args.other_aug,
-            "identity_aug": args.identity_aug,
-            "logits_size": single_agent_env.action_spaces['X'].n if (not args.identity_aug) else args.max_league_size, 
-        },
-    )
+    module_class=ActionMaskingSharedCriticTorchRLModule,
+    observation_space=single_agent_env.observation_spaces['X'],
+    action_space=single_agent_env.action_spaces['X'],
+    learner_only=True, # Only build on learner
+    model_config={
+        "head_fcnet_hiddens": tuple(args.critic_fcnet),
+        "self_aug": args.self_aug,
+        "other_aug": args.other_aug,
+        "identity_aug": args.identity_aug,
+        "logits_size": single_agent_env.action_spaces['X'].n if (not args.identity_aug) else args.max_league_size, 
+    },
+)
 
-# League stuff
-win_rate_threshold = 0.95 # wins / wins+losses, wins > 2
-def agent_to_module_mapping_fn(agent_id, episode, **kwargs):
-    # agent_id = [0|1] -> module depends on episode ID
-    # This way, we make sure that both modules sometimes play agent0
-    # (start player) and sometimes agent1 (player to move 2nd).
-    return "main" if ((hash(episode.id_) % 2 == 0) != (agent_id=='X')) else "main_v0"
+
 
 config = (
     CMAPPOConfig()
     .environment(TicTacToe, env_config={})
     .callbacks( # set up our league
-        functools.partial(SelfPlayCallback,
-            win_rate_threshold=win_rate_threshold,
-            _lambda=0.1, # Total probability to allocate to agents with zero WR vs main
-            max_league_size=args.max_league_size
-        )
+        sp_callback
     )
     .env_runners(
         num_env_runners=args.num_env_runners,
@@ -125,10 +127,10 @@ config = (
         }
     )
     .multi_agent(
-          policies=['main','main_v0', SHARED_CRITIC_ID]+heuristics,
-          policy_mapping_fn=agent_to_module_mapping_fn,
+          policies=['main','main_v0','main_exploiter', SHARED_CRITIC_ID]+heuristics,
+          policy_mapping_fn=atm_fn,
           # Only the learned policy should be trained.
-          policies_to_train=['main', SHARED_CRITIC_ID],
+          policies_to_train=['main','main_exploiter', SHARED_CRITIC_ID],
       )
     .training(
         learner_class=CMAPPOTorchLearner,
@@ -151,7 +153,7 @@ from ray.rllib.utils.metrics import (
     EVALUATION_RESULTS,
 )
 
-num_iters = 100
+num_iters = args.stop_iters
 
 for i in range(num_iters):
   results = algo.train()

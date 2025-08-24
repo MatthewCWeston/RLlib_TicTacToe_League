@@ -23,7 +23,6 @@ class DefaultCMAPPORLModule(RLModule, InferenceOnlyAPI, abc.ABC):
 
     @override(RLModule)
     def setup(self):
-        print("DefaultCMAPPORLModule setup")
         try:
           # __sphinx_doc_begin__
           # If we have a stateful model, states for the critic need to be collected
@@ -44,10 +43,10 @@ class DefaultCMAPPORLModule(RLModule, InferenceOnlyAPI, abc.ABC):
           self.encoder = self.catalog.build_encoder(framework=self.framework)
           self.pi = self.catalog.build_pi_head(framework=self.framework)
         except Exception as e:
+          print("Error in DefaultCMAPPORLModule setup")
           print(e)
           raise e
         # __sphinx_doc_end__
-        print("DefaultCMAPPORLModule setup done")
 
     @override(RLModule)
     def get_initial_state(self) -> dict:
