@@ -17,6 +17,7 @@ torch, nn = try_import_torch()
 # our code
 from algo.modules.critic.SharedCriticTorchRLModule import SharedCriticTorchRLModule
 from algo.modules.critic.SharedCriticCatalog import SharedCriticCatalog
+from algo.constants import ACTION_MASK, OBSERVATIONS
 
 @DeveloperAPI
 class ActionMaskingSharedCriticTorchRLModule(SharedCriticTorchRLModule):
@@ -28,7 +29,7 @@ class ActionMaskingSharedCriticTorchRLModule(SharedCriticTorchRLModule):
           if catalog_class is None:
               catalog_class = SharedCriticCatalog
           self.observation_space_with_mask = observation_space
-          self.observation_space = observation_space["observations"]
+          self.observation_space = observation_space[OBSERVATIONS]
           super().__init__(*args, **kwargs, catalog_class=catalog_class, observation_space=self.observation_space)
         except Exception as e:
           print(e)
@@ -43,11 +44,11 @@ class ActionMaskingSharedCriticTorchRLModule(SharedCriticTorchRLModule):
         # Check, if the observations are still in `dict` form.
         if isinstance(batch[Columns.OBS], dict):
             # Preprocess the batch to extract the `observations` to `Columns.OBS`.
-            action_mask = batch[Columns.OBS].pop("action_mask")
-            batch[Columns.OBS] = batch[Columns.OBS].pop("observations")
+            action_mask = batch[Columns.OBS].pop(ACTION_MASK)
+            batch[Columns.OBS] = batch[Columns.OBS].pop(OBSERVATIONS)
             # NOTE: Because we manipulate the batch we need to add the `action_mask`
             # to the batch to access them in `_forward_train`.
-            batch["action_mask"] = action_mask
+            batch[ACTION_MASK] = action_mask
         # Call the super's method to compute values for GAE.
         return super().compute_values(batch, embeddings)
 

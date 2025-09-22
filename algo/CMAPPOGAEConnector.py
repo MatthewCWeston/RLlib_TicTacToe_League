@@ -144,11 +144,9 @@ class CMAPPOGAEConnector(ConnectorV2):
             other_mid = 0 if other_mid=='main' else 1
         other_mids[other_mid] += 1
         other_mid = torch.nn.functional.one_hot(torch.tensor(other_mid), aug_size)
-        # First part of X's aug and O's aug come from X
+        # Populate relevant indices with opponent ID
         batch[x_mid][AGENT_LOGITS][x_s:x_s+x_l] = other_mid
         batch[o_mid][AGENT_LOGITS][o_s:o_s+o_l] = other_mid
-      print("Other module appearances this epoch: ")
-      print(other_mids)
 
     def call_with_interleaving(
         self,

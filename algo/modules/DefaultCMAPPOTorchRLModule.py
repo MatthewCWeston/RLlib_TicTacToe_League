@@ -1,4 +1,3 @@
-# @title DefaultCMAPPOTorchRLModule
 from typing import Any, Dict, Optional
 
 from ray.rllib.algorithms.ppo.default_ppo_rl_module import DefaultPPORLModule

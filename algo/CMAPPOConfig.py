@@ -48,6 +48,12 @@ LEARNER_RESULTS_KL_KEY = "mean_kl_loss"
 LEARNER_RESULTS_CURR_KL_COEFF_KEY = "curr_kl_coeff"
 LEARNER_RESULTS_CURR_ENTROPY_COEFF_KEY = "curr_entropy_coeff"
 
+class CMAPPO(PPO):
+    @classmethod
+    @override(Algorithm)
+    def get_default_config(cls) -> AlgorithmConfig:
+        return CMAPPOConfig()
+
 
 class CMAPPOConfig(PPOConfig): # AlgorithmConfig -> PPOConfig -> CMAPPO
     """Defines a configuration class from which a CMAPPO Algorithm can be built.
@@ -65,7 +71,7 @@ class CMAPPOConfig(PPOConfig): # AlgorithmConfig -> PPOConfig -> CMAPPO
             # Add constructor kwargs here (if any).
         }
 
-        super().__init__(algo_class=algo_class or PPO)
+        super().__init__(algo_class=algo_class or CMAPPO)
 
         # fmt: off
         # __sphinx_doc_begin__
