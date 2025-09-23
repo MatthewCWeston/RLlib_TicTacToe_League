@@ -120,8 +120,9 @@ config = (
     .evaluation(
         custom_evaluation_function=custom_eval_function,
         evaluation_interval=10, # every K training steps
-        evaluation_duration=100,
+        evaluation_duration=6000,
         evaluation_config={
+            'roles': ['X','O'],
             'heuristics': heuristics,
             'ensemble': ['main'], # policies to use when calculating winrates
         }

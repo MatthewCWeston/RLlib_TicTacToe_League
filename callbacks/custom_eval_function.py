@@ -25,7 +25,7 @@ def custom_eval_function(
     # For demonstration purposes, run through some number of evaluation rounds within this one call. Note that this function is called once per training iteration (`Algorithm.train()` call) OR once per `Algorithm.evaluate()`
     heuristics = algorithm.config.evaluation_config['heuristics']
     ensemble = algorithm.config.evaluation_config['ensemble']
-    roles = ['O'] #['X', 'O']
+    roles = algorithm.config.evaluation_config['roles']
     to_sample = int(algorithm.config.evaluation_duration / len(heuristics) / len(roles))
     for h in heuristics:
       for role in roles: # I think this is the neatest way to do both
@@ -60,7 +60,8 @@ def custom_eval_function(
         # For each heuristic, go through its sampled set of episodes and compute win rate
         for (ep, m) in zip(episodes_h, metrics_h):
           r = ep.agent_episodes[role].get_return()
-          m['Win Rates'] = {h:{ # Replace $heuristic with the heuristic, try mean reduction
+          m['Win Rates'] = {}
+          m['Win Rates'][role] = {h:{ # Replace $heuristic with the heuristic, try mean reduction
               'Win': Stats(init_values=(r==1), reduce="mean"),
               'Draw': Stats(init_values=(r==0), reduce="mean"),
               'Loss': Stats(init_values=(r==-1), reduce="mean"),
